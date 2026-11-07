@@ -1,25 +1,135 @@
-name: CI
+name: CI and container publication
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: packarr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
+  secrets:
+    name: Scan complete Git history for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Gitleaks (redacted output)
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --redact=100 --log-opts=--all --no-banner
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
       - run: PYTHONPATH=packarr/src python -m unittest discover -s tests -v
-      - run: python -m compileall -q packarr/src
+      - run: python tools/release_metadata.py
+      - run: python -m compileall -q packarr/src tools
   container:
-    runs-on: ubuntu-latest
+    name: Build and test ${{ matrix.arch }}
+    needs: [secrets, test]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - run: docker build -t packarr:test packarr
-      - run: docker run --rm packarr:test --version
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Read release metadata from Home Assistant configuration
+        id: release
+        run: python3 tools/release_metadata.py --github-output
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build native image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: ./packarr
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: packarr:ci
+          provenance: false
+          cache-from: type=gha,scope=packarr-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=packarr-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Verify executable and run tests inside the image
+        env:
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          test "$(docker run --rm packarr:ci --version)" = "$EXPECTED_VERSION"
+          docker run --rm --entrypoint python3 -e PYTHONPATH=/opt/packarr:/repo -v "$PWD:/repo:ro" packarr:ci -m unittest discover -s /repo/tests -v
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'DmitryKadyshev/hassio-addons-packarr'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Save tested architecture image to GHCR
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'DmitryKadyshev/hassio-addons-packarr'
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker tag packarr:ci "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+          docker push "$IMAGE:sha-$GITHUB_SHA-$ARCH"
+
+  publish:
+    name: Publish and verify amd64 + arm64 image manifest
+    needs: container
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'DmitryKadyshev/hassio-addons-packarr'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Read release metadata
+        id: release
+        run: python3 tools/release_metadata.py --github-output
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish version, commit and latest tags
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            --tag "$IMAGE:latest" \
+            "$IMAGE:sha-$GITHUB_SHA-amd64" \
+            "$IMAGE:sha-$GITHUB_SHA-aarch64"
+          docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > /tmp/packarr-manifest.json
+          python3 tools/release_metadata.py --verify-manifest /tmp/packarr-manifest.json
+          printf 'Published `%s:%s` for **linux/amd64** and **linux/arm64**.\n' "$IMAGE" "$VERSION" >> "$GITHUB_STEP_SUMMARY"

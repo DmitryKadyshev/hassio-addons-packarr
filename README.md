@@ -1,5 +1,7 @@
 # Packarr
 
+<p><img src="packarr/logo@2x.png" alt="Packarr" width="360"></p>
+
 Home Assistant app for downloading **only missing episodes** from rolling torrent
 packs, using Sonarr and Transmission. For example: when a topic grows from `S29E1-4`
 to `S29E1-5`, download episode 5 while excluding episodes 1–4.
@@ -23,8 +25,20 @@ deletion is implemented. No API keys, torrent contents, or credentials appear in
 ## Install in Home Assistant
 
 Use the [DK add-on repository](https://github.com/DmitryKadyshev/hassio-addons).
-Packarr is included there as the `hassio-addons-packarr` Git submodule. It builds
-locally for `aarch64` and `amd64` and requires no privileged permissions or Docker socket.
+Packarr is included there as the `hassio-addons-packarr` Git submodule. Home Assistant
+pulls the ready-made image `ghcr.io/dmitrykadyshev/addon-packarr:<version>`; it does
+not build on the device. One multi-platform tag serves `amd64` (x86-64) and `aarch64`
+(ARM64). No privileged permissions or Docker socket are needed.
+
+[Container package](https://github.com/users/DmitryKadyshev/packages/container/package/addon-packarr)
+· [CI and publication](https://github.com/DmitryKadyshev/hassio-addons-packarr/actions)
+· [Credential audit](docs/SECURITY-AUDIT.md)
+
+CI scans the complete Git history, runs unit tests, builds and tests each native
+architecture, pushes the architecture images to GHCR, and publishes a verified
+combined manifest. Release tags match `packarr/config.yaml`; commit tags and `latest`
+are also retained. Fork/PR builds do not publish images. The first GHCR package must
+be made public in Package settings to allow installations without registry credentials.
 
 See [configuration and operational limits](packarr/DOCS.md). Start in dry-run,
 check plans, then enable downloads. No series IDs, tracker topics, or `targets` list

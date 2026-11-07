@@ -3,7 +3,16 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+.env.*
+!.env.example
 options.json
+options.*.json
+private/
+*.key
+*.pem
+*.p12
+credentials*.json
+secrets*.json
 state/
 *.db*
 *.torrent

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-packarr"
-version = "0.2.0"
+version = "0.3.0"
 description = "Download only missing Sonarr episodes from rolling torrent packs"
 requires-python = ">=3.12"
 dependencies = []

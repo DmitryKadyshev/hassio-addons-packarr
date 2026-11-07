@@ -2,3 +2,10 @@ __pycache__
 *.pyc
 options.json
 state
+.env*
+*.db*
+*.torrent
+*.key
+*.pem
+credentials*.json
+secrets*.json

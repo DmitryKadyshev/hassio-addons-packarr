@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Add Packarr branding and Home Assistant icon/logo assets.
+- Publish tested native amd64 and aarch64 images plus a combined GHCR manifest.
+- Configure Home Assistant to pull the versioned image instead of building locally.
+- Gate publication on a full-history credential scan and release/platform checks.
+- Pin CI actions and the credential scanner; document the credential audit.
+
 ## 0.2.0
 
 - Replace manual `targets` with automatic discovery across the monitored Sonarr library.
