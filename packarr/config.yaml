@@ -1,6 +1,6 @@
 ---
 name: Packarr
-version: 0.1.0
+version: 0.2.0
 slug: packarr
 description: Download only missing Sonarr episodes from rolling torrent packs
 url: https://github.com/DmitryKadyshev/hassio-addons-packarr
@@ -22,7 +22,6 @@ options:
   poll_interval: 900
   min_seeders: 1
   max_pack_bytes: 68719476736
-  targets: []
 schema:
   sonarr_url: url
   sonarr_api_key: password
@@ -35,8 +34,3 @@ schema:
   poll_interval: int(300,)
   min_seeders: int(1,)
   max_pack_bytes: int(1,)
-  targets:
-    - series_id: int(1,)
-      season: int(1,)
-      indexer_id: int(1,)
-      topic_url: url

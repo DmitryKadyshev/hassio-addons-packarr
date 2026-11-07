@@ -16,3 +16,18 @@
 The regression replay is not a real download/import test against the media library.
 The complete mutation workflow is covered with isolated fake clients, including
 loss of responses, restarts, ownership changes, and import reconciliation.
+
+## 0.2.0 automatic discovery
+
+- 50 tests passed on Python 3.12, Home Assistant's Python 3.14/aarch64, and the
+  amd64 runtime image. Existing download/import/restart tests remain included.
+- Read the real Sonarr library: 31 series, 30 monitored, 45 monitored aired missing
+  episodes in 6 seasons, and 2 configured automatic torrent indexers.
+- Completed a dry-run search across all 6 eligible seasons, without any `targets`.
+- Automatically selected only The Simpsons S38E05: 860,374,825 bytes out of a
+  4,339,164,123-byte pack; the other 4 files were excluded.
+- No torrent jobs or import commands were submitted. Other releases without a
+  confirmed Sonarr series/episode identity remained rejected.
+- Verified legacy target options are ignored, paginated Wanted/queue inventories
+  are read completely, native queue races are rechecked, and bounded searches rotate
+  across seasons and candidates after restarts.

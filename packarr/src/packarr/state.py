@@ -37,5 +37,12 @@ class State:
     def jobs(self):
         return [self.get(row[0]) for row in self.db.execute("SELECT hash FROM jobs ORDER BY updated")]
 
+    def metadata(self, key, default=None):
+        row = self.db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_metadata(self, key, value):
+        self.db.execute("INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
     def close(self):
         self.db.close()

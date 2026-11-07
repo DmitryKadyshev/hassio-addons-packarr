@@ -9,7 +9,7 @@ import unittest
 from packarr.api import Sonarr, Transmission
 from packarr.engine import Engine
 from packarr.planner import is_missing, plan, validate_release
-from packarr.settings import Held, Settings, Target, Unavailable
+from packarr.settings import Held, Settings, SearchScope, Unavailable
 from packarr.state import State
 from packarr.torrent import read_metainfo
 
@@ -31,12 +31,13 @@ def metainfo(numbers=(1, 2, 3, 4), *, paths=None):
                               b"piece length": 100, b"pieces": b"x" * len(files) * 20}})
 
 
-TARGET = Target(85, 29, 12, "https://rutracker.org/forum/viewtopic.php?t=6918073")
+SCOPE = SearchScope(85, 29)
+INDEXER = {"id": 12, "implementation": "Torznab", "protocol": "torrent", "enableAutomaticSearch": True, "tags": [], "fields": [{"name": "baseUrl", "value": "https://indexer.test/"}]}
 QUALITY = {"quality": {"id": 18, "name": "WEBDL-2160p"}, "revision": {"version": 1, "real": 0}}
 
 
 def catalog():
-    return [{"id": 7053 + n, "seasonNumber": 29, "episodeNumber": n, "monitored": True,
+    return [{"id": 7053 + n, "seriesId": 85, "seasonNumber": 29, "episodeNumber": n, "monitored": True,
              "hasFile": n < 4, "episodeFileId": 34035 + n if n < 4 else 0,
              "airDateUtc": "2020-01-01T00:00:00Z" if n <= 4 else "2099-01-01T00:00:00Z"}
             for n in range(1, 7)]
@@ -44,7 +45,8 @@ def catalog():
 
 def parse_title(title):
     number = int(title.split("S29E")[1][:2])
-    return {"series": {"id": 85}, "parsedEpisodeInfo": {"seasonNumber": 29, "episodeNumbers": [number]}}
+    return {"series": {"id": 85}, "parsedEpisodeInfo": {"seasonNumber": 29, "episodeNumbers": [number]},
+            "episodes": [{"id": 7053 + number, "seriesId": 85, "seasonNumber": 29, "episodeNumber": number}]}
 
 
 def series():
@@ -53,7 +55,7 @@ def series():
 
 def release():
     return {"mappedSeriesId": 85, "indexerId": 12, "seasonNumber": 29, "seeders": 100,
-            "guid": TARGET.topic_url, "downloadAllowed": True, "quality": QUALITY,
+            "guid": "https://rutracker.org/forum/viewtopic.php?t=6918073", "episodeNumbers": [1, 2, 3, 4], "downloadAllowed": True, "quality": QUALITY,
             "rejections": ["Existing file on disk has a equal or higher Custom Format score: 0"]}
 
 
@@ -64,18 +66,33 @@ class FakeSonarr:
         self.fail_import = False
         self.finished = False
         self.queue = []
+        self.series_list = [series()]
+        self.indexers = [copy.deepcopy(INDEXER)]
+        self.releases = [release()]
+        self.reads = []
+
+    @staticmethod
+    def page(rows, params):
+        size = params.get("pageSize", 250)
+        start = (params.get("page", 1) - 1) * size
+        return {"records": copy.deepcopy(rows[start:start + size]), "totalRecords": len(rows)}
 
     def call(self, path, *, params=None, data=None, method=None):
+        self.reads.append((path, params))
         if data is not None or method:
             self.mutations.append((path, params, data, method))
         if path == "episode":
-            return copy.deepcopy(self.catalog)
-        if path == "series/85":
-            return series()
-        if path == "indexer/12":
-            return {"fields": [{"name": "baseUrl", "value": "https://indexer.test/"}]}
+            return copy.deepcopy([e for e in self.catalog if e["seriesId"] == params["seriesId"]])
+        if path == "series":
+            return copy.deepcopy(self.series_list)
+        if path.startswith("series/"):
+            return next(copy.deepcopy(s) for s in self.series_list if s["id"] == int(path.split("/")[1]))
+        if path == "wanted/missing":
+            return self.page([e for e in self.catalog if not e["hasFile"]], params)
+        if path == "indexer":
+            return copy.deepcopy(self.indexers)
         if path == "release":
-            return [release()]
+            return copy.deepcopy(self.releases)
         if path == "parse":
             return parse_title(params["title"])
         if path == "manualimport":
@@ -88,7 +105,7 @@ class FakeSonarr:
         if path == "command/123":
             return {"id": 123, "status": "completed" if self.finished else "started"}
         if path == "queue":
-            return {"records": self.queue}
+            return self.page(self.queue, params)
         if path.startswith("queue/") and method == "DELETE":
             self.queue = []
             return None
@@ -129,7 +146,7 @@ class FakeTransmission:
 
 class PlannerTests(unittest.TestCase):
     def make_plan(self, **kwargs):
-        return plan(read_metainfo(metainfo()), TARGET, series(), kwargs.pop("episodes", catalog()),
+        return plan(read_metainfo(metainfo()), SCOPE, series(), kwargs.pop("episodes", catalog()),
                     kwargs.pop("parse_file", parse_title), max_bytes=kwargs.pop("max_bytes", 10000), **kwargs)
 
     def test_only_missing_fourth_episode_is_selected(self):
@@ -184,18 +201,44 @@ class PlannerTests(unittest.TestCase):
         r = release()
         r["rejections"].append("Not enough seeders")
         with self.assertRaisesRegex(Held, "other_rejections"):
-            validate_release(r, TARGET, Settings())
+            validate_release(r, SCOPE, Settings(), INDEXER, series())
 
-    def test_topic_and_series_must_match(self):
-        for key, value in [("guid", TARGET.topic_url + "0"), ("mappedSeriesId", 84), ("seasonNumber", 28)]:
+    def test_indexer_and_series_must_match(self):
+        for key, value in [("indexerId", 11), ("mappedSeriesId", 84), ("seasonNumber", 28)]:
             r = release()
             r[key] = value
             with self.assertRaises(Held):
-                validate_release(r, TARGET, Settings())
+                validate_release(r, SCOPE, Settings(), INDEXER, series())
 
     def test_dry_run_requires_real_boolean(self):
         with self.assertRaises(Held):
             Settings(dry_run="false")
+
+    def test_native_episode_ids_resolve_scene_and_absolute_numbering(self):
+        s = series()
+        s.update(seriesType="anime", useSceneNumbering=True)
+        def mapped(title):
+            result = parse_title(title)
+            result["parsedEpisodeInfo"] = {"seasonNumber": 1, "episodeNumbers": [], "absoluteEpisodeNumbers": [100]}
+            return result
+        p = plan(read_metainfo(metainfo()), SCOPE, s, catalog(), mapped, max_bytes=10000)
+        self.assertEqual([w["episode_id"] for w in p["wanted"]], [7057])
+
+    def test_unknown_native_mapping_is_never_guessed_from_title(self):
+        def unknown(title):
+            result = parse_title(title)
+            result["episodes"] = []
+            return result
+        with self.assertRaises(Held):
+            self.make_plan(parse_file=unknown)
+
+    def test_native_mapping_outside_season_is_rejected(self):
+        def wrong_season(title):
+            result = parse_title(title)
+            result["episodes"][0]["seasonNumber"] = 28
+            return result
+        with self.assertRaisesRegex(Held, "ambiguous_file"):
+            self.make_plan(parse_file=wrong_season)
 
 
 class MetainfoTests(unittest.TestCase):
@@ -227,10 +270,10 @@ class MetainfoTests(unittest.TestCase):
             read_metainfo(raw)
 
 
-class WorkflowTests(unittest.TestCase):
+class WorkflowFixture:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.settings = Settings(dry_run=False, sonarr_api_key="secret", targets=[TARGET], state_dir=self.temp.name,
+        self.settings = Settings(dry_run=False, sonarr_api_key="secret", state_dir=self.temp.name,
                                  transmission_download_dir="/downloads/packarr", sonarr_download_dir="/share/downloads/packarr")
         self.sonarr = FakeSonarr()
         self.client = FakeTransmission()
@@ -248,6 +291,9 @@ class WorkflowTests(unittest.TestCase):
                 f["bytesCompleted"] = f["length"]
         self.client.torrent["status"] = 6
 
+
+
+class WorkflowTests(WorkflowFixture, unittest.TestCase):
     def test_end_to_end_only_fourth_downloaded_and_imported(self):
         self.engine.discover()
         self.assertEqual([m for m, _ in self.client.calls], ["torrent-add", "torrent-start"])
@@ -277,7 +323,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.state.jobs(), [])
 
     def test_restart_after_add_before_start_reuses_owned_torrent(self):
-        p = plan(read_metainfo(metainfo()), TARGET, series(), catalog(), parse_title, max_bytes=10000)
+        p = plan(read_metainfo(metainfo()), SCOPE, series(), catalog(), parse_title, max_bytes=10000)
         p["download_dir"] = "/downloads/packarr/" + p["hash"]
         p["sonarr_dir"] = "/share/downloads/packarr/" + p["hash"]
         p["owner_label"] = "packarr-" + self.state.owner_id
@@ -384,6 +430,134 @@ class ApiSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "origin"):
             Sonarr(Settings()).metainfo({"downloadUrl": "http://other.invalid/download"},
                                        {"fields": [{"name": "baseUrl", "value": "http://indexer.invalid/"}]})
+
+
+class AutomaticDiscoveryTests(WorkflowFixture, unittest.TestCase):
+    def test_old_targets_option_is_ignored_not_applied(self):
+        settings = Settings.load({"sonarr_api_key": "secret", "targets": [{"series_id": 999}]})
+        self.assertFalse(hasattr(settings, "targets"))
+
+    def test_all_monitored_series_are_considered(self):
+        second = copy.deepcopy(series())
+        second["id"] = 86
+        e = copy.deepcopy(self.sonarr.catalog[3])
+        e.update(id=9000, seriesId=86)
+        self.sonarr.series_list.append(second)
+        self.sonarr.catalog.append(e)
+        self.settings.dry_run = True
+        self.engine.discover()
+        searched = {p["seriesId"] for name, p in self.sonarr.reads if name == "release"}
+        self.assertEqual(searched, {85, 86})
+        self.assertEqual(self.engine.status()["discovery"]["monitored_series"], 2)
+        self.assertEqual(self.client.calls, [])
+
+    def test_unmonitored_series_is_not_searched(self):
+        self.sonarr.series_list[0]["monitored"] = False
+        self.engine.discover()
+        self.assertFalse(any(name == "release" for name, _ in self.sonarr.reads))
+        self.assertEqual(self.client.calls, [])
+
+    def test_complete_series_is_not_searched(self):
+        self.sonarr.catalog[3]["hasFile"] = True
+        self.engine.discover()
+        self.assertFalse(any(name == "release" for name, _ in self.sonarr.reads))
+
+    def test_missing_in_native_queue_is_not_downloaded_again(self):
+        self.sonarr.queue = [{"id": 100, "episodeId": 7057, "status": "downloading"}]
+        self.engine.discover()
+        self.assertEqual(self.client.calls, [])
+        self.assertFalse(any(name == "release" for name, _ in self.sonarr.reads))
+
+    def test_queue_is_rechecked_before_submission(self):
+        original = self.sonarr.metainfo
+        def grab_during_search(release, indexer):
+            self.sonarr.queue = [{"id": 100, "episodeId": 7057, "status": "downloading"}]
+            return original(release, indexer)
+        self.sonarr.metainfo = grab_during_search
+        self.engine.discover()
+        self.assertEqual(self.client.calls, [])
+
+    def test_automatic_indexer_setting_is_respected(self):
+        self.sonarr.indexers[0]["enableAutomaticSearch"] = False
+        self.engine.discover()
+        self.assertFalse(any(name == "release" for name, _ in self.sonarr.reads))
+        self.assertEqual(self.client.calls, [])
+
+    def test_indexer_tags_are_respected(self):
+        self.sonarr.indexers[0]["tags"] = [2]
+        self.engine.discover()
+        self.assertEqual(self.client.calls, [])
+        self.sonarr.series_list[0]["tags"] = [2]
+        self.engine.discover()
+        self.assertEqual(sum(method == "torrent-add" for method, _ in self.client.calls), 1)
+
+    def test_individual_episode_in_unmonitored_season_is_supported(self):
+        self.sonarr.series_list[0]["seasons"][0]["monitored"] = False
+        self.engine.discover()
+        self.assertEqual(sum(method == "torrent-add" for method, _ in self.client.calls), 1)
+
+    def test_single_episode_results_are_left_to_sonarr(self):
+        self.sonarr.releases[0]["episodeNumbers"] = [4]
+        self.engine.discover()
+        self.assertEqual(self.client.calls, [])
+
+    def test_other_tracker_topics_are_automatically_accepted(self):
+        self.sonarr.releases[0]["guid"] = "https://other.tracker.test/topic/123"
+        self.engine.discover()
+        self.assertEqual(sum(method == "torrent-add" for method, _ in self.client.calls), 1)
+
+    def test_empty_old_pack_does_not_hide_a_later_suitable_pack(self):
+        old = release()
+        old["guid"] = "old"
+        self.sonarr.releases.insert(0, old)
+        self.sonarr.metainfo = lambda r, i: metainfo(numbers=(1, 2, 3)) if r["guid"] == "old" else metainfo()
+        self.engine.discover()
+        self.assertEqual(sum(method == "torrent-add" for method, _ in self.client.calls), 1)
+
+    def test_wanted_and_queue_pagination_is_complete(self):
+        self.engine.PAGE_SIZE = 1
+        for e in self.sonarr.catalog[:3]:
+            e.update(hasFile=False, episodeFileId=0)
+        self.sonarr.queue = [{"id": 100, "episodeId": 7054}, {"id": 101, "episodeId": 7055}, {"id": 102, "episodeId": 7056}]
+        self.engine.discover()
+        self.assertGreaterEqual(len([1 for n, _ in self.sonarr.reads if n == "wanted/missing"]), 4)
+        self.assertEqual(self.client.calls[0][1]["files-wanted"], [3])
+
+    def test_search_budget_rotates_and_survives_restart(self):
+        self.settings.dry_run = True
+        self.engine.SEARCHES_PER_CYCLE = 1
+        second = copy.deepcopy(series())
+        second["id"] = 86
+        e = copy.deepcopy(self.sonarr.catalog[3])
+        e.update(id=9000, seriesId=86)
+        self.sonarr.series_list.append(second)
+        self.sonarr.catalog.append(e)
+        self.engine.discover()
+        self.assertEqual([p["seriesId"] for n, p in self.sonarr.reads if n == "release"], [85])
+        restarted = Engine(self.settings, sonarr=self.sonarr, transmission=self.client, state=self.state)
+        restarted.SEARCHES_PER_CYCLE = 1
+        restarted.discover()
+        self.assertEqual([p["seriesId"] for n, p in self.sonarr.reads if n == "release"], [85, 86])
+
+    def test_no_api_key_stays_idle(self):
+        self.settings.sonarr_api_key = ""
+        self.engine.discover()
+        self.assertEqual(self.sonarr.reads, [])
+
+    def test_metadata_budget_does_not_permanently_hide_later_candidates(self):
+        self.settings.dry_run = True
+        self.engine.METAINFO_PER_SEARCH = 1
+        bad, good = release(), release()
+        bad["guid"], good["guid"] = "bad", "good"
+        self.sonarr.releases = [bad, good]
+        seen = []
+        def inspect(r, _):
+            seen.append(r["guid"])
+            return b"invalid" if r["guid"] == "bad" else metainfo()
+        self.sonarr.metainfo = inspect
+        self.engine.discover()
+        self.engine.discover()
+        self.assertEqual(seen, ["bad", "good"])
 
 
 if __name__ == "__main__":

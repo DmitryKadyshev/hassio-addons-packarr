@@ -31,16 +31,13 @@ def absolute_dir(value: str) -> str:
 
 
 @dataclass(frozen=True)
-class Target:
+class SearchScope:
     series_id: int
     season: int
-    indexer_id: int
-    topic_url: str
 
     def __post_init__(self):
-        if any(type(v) is not int or v <= 0 for v in (self.series_id, self.season, self.indexer_id)):
-            raise Held("invalid_target_ids")
-        origin(self.topic_url)
+        if any(type(v) is not int or v <= 0 for v in (self.series_id, self.season)):
+            raise Held("invalid_search_scope")
 
 
 @dataclass
@@ -57,7 +54,6 @@ class Settings:
     min_seeders: int = 1
     max_pack_bytes: int = 64 * 1024**3
     state_dir: str = "/data/packarr"
-    targets: list[Target] = field(default_factory=list)
 
     def __post_init__(self):
         origin(self.sonarr_url)
@@ -68,7 +64,7 @@ class Settings:
             raise Held("invalid_min_seeders")
         if type(self.max_pack_bytes) is not int or self.max_pack_bytes < 1:
             raise Held("invalid_pack_size_limit")
-        if self.targets and not self.sonarr_api_key:
+        if not self.dry_run and not self.sonarr_api_key:
             raise Held("sonarr_api_key_required")
         if not self.dry_run:
             absolute_dir(self.transmission_download_dir)
@@ -77,7 +73,8 @@ class Settings:
     @classmethod
     def load(cls, data: dict):
         data = dict(data)
-        data["targets"] = [Target(**item) for item in data.get("targets", [])]
+        # Existing 0.1 options remain loadable, but no longer limit discovery.
+        data.pop("targets", None)
         try:
             return cls(**data)
         except TypeError as exc:

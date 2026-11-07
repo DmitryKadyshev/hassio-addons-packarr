@@ -17,7 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description="Packarr selective rolling-pack helper")
     parser.add_argument("--config", default="/data/options.json")
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--inspect", action="store_true", help="Dry-run: inspect a target even if no episode is missing")
+    parser.add_argument("--inspect", action="store_true", help="Legacy dry-run discovery alias; complete seasons are not searched")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -37,7 +37,7 @@ def main():
             stop = threading.Event()
             signal.signal(signal.SIGTERM, lambda *_: stop.set())
             signal.signal(signal.SIGINT, lambda *_: stop.set())
-            event("started", version=__version__, dry_run=settings.dry_run, targets=len(settings.targets))
+            event("started", version=__version__, dry_run=settings.dry_run, discovery="automatic")
             next_search = 0
             while not stop.is_set():
                 engine.reconcile()
