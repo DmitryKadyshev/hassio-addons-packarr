@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+options.json
+state/
+*.db*
+*.torrent
+.coverage
+build/
+dist/

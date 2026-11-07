@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ha-packarr"
+version = "0.1.0"
+description = "Download only missing Sonarr episodes from rolling torrent packs"
+requires-python = ">=3.12"
+dependencies = []
+license = {text = "MIT"}
+
+[project.scripts]
+packarr = "packarr.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["packarr/src"]

@@ -1,0 +1,42 @@
+---
+name: Packarr
+version: 0.1.0
+slug: packarr
+description: Download only missing Sonarr episodes from rolling torrent packs
+url: https://github.com/DmitryKadyshev/hassio-addons-packarr
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+init: true
+options:
+  sonarr_url: http://sonarr:8989
+  sonarr_api_key: ""
+  transmission_url: http://transmission:9091/transmission/rpc
+  transmission_username: ""
+  transmission_password: ""
+  transmission_download_dir: ""
+  sonarr_download_dir: ""
+  dry_run: true
+  poll_interval: 900
+  min_seeders: 1
+  max_pack_bytes: 68719476736
+  targets: []
+schema:
+  sonarr_url: url
+  sonarr_api_key: password
+  transmission_url: url
+  transmission_username: str
+  transmission_password: password
+  transmission_download_dir: str
+  sonarr_download_dir: str
+  dry_run: bool
+  poll_interval: int(300,)
+  min_seeders: int(1,)
+  max_pack_bytes: int(1,)
+  targets:
+    - series_id: int(1,)
+      season: int(1,)
+      indexer_id: int(1,)
+      topic_url: url
